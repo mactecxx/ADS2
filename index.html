@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Employee Portal</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        /* CSS RESET & LAYOUT */
+        :root { --bg: #f1f5f9; --dark: #0f172a; --primary: #0891b2; --green: #22c55e; --red: #ef4444; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, sans-serif; }
+        body { background: var(--bg); height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+
+        /* RIBBON */
+        .ribbon { height: 40px; background: var(--dark); color: white; display: flex; align-items: center; overflow: hidden; }
+        .ribbon-track { display: flex; gap: 40px; padding-left: 100%; animation: scroll 30s linear infinite; white-space: nowrap; }
+        .ribbon-item { font-size: 12px; opacity: 0.8; }
+        @keyframes scroll { 100% { transform: translateX(-100%); } }
+
+        /* GRID */
+        .grid { display: grid; grid-template-columns: 280px 1fr 300px; height: calc(100vh - 40px); }
+        .col { background: white; border-right: 1px solid #e2e8f0; display: flex; flex-direction: column; }
+        .col-right { border-left: 1px solid #e2e8f0; padding: 20px; overflow-y: auto; }
+
+        /* QUEUE LIST */
+        .queue-item { padding: 15px; border-bottom: 1px solid #f1f5f9; cursor: pointer; }
+        .queue-item:hover { background: #f8fafc; }
+        .queue-item.active { background: #ecfeff; border-left: 4px solid var(--primary); }
+        .badge { font-size: 10px; padding: 3px 6px; background: #e2e8f0; border-radius: 4px; }
+        .badge.call { background: var(--red); color: white; animation: blink 1s infinite; }
+
+        /* CHAT */
+        .chat-header { padding: 15px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; }
+        .chat-msgs { flex: 1; background: #f8fafc; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 10px; }
+        .msg { max-width: 70%; padding: 10px; border-radius: 8px; font-size: 14px; }
+        .msg.me { align-self: flex-end; background: var(--primary); color: white; }
+        .msg.client { align-self: flex-start; background: white; border: 1px solid #e2e8f0; }
+
+        /* INPUTS */
+        .inp { width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 4px; margin-bottom: 10px; font-size: 13px; }
+        .btn { padding: 8px; background: var(--primary); color: white; border: none; border-radius: 4px; cursor: pointer; width: 100%; margin-top: 5px; }
+        .btn-green { background: var(--green); }
+        .btn-red { background: var(--red); }
+
+        /* MODALS */
+        #login-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--dark); z-index: 200; display: flex; justify-content: center; align-items: center; }
+        #incoming-modal { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: var(--dark); color: white; padding: 15px 30px; border-radius: 30px; display: none; align-items: center; gap: 15px; z-index: 100; box-shadow: 0 10px 20px rgba(0,0,0,0.3); }
+
+        @keyframes blink { 50% { opacity: 0.5; } }
+    </style>
+</head>
+<body>
+
+    <div id="login-overlay">
+        <div style="background:white; padding:40px; border-radius:8px; width:300px; text-align:center;">
+            <h3>Staff Portal</h3><br>
+            <input id="e-email" class="inp" placeholder="Staff Email">
+            <input id="e-pass" type="password" class="inp" placeholder="Password">
+            <button class="btn" onclick="staffLogin()">Login</button>
+        </div>
+    </div>
+
+    <div id="incoming-modal">
+        <div style="width:10px; height:10px; background:red; border-radius:50%;"></div>
+        <span id="inc-text">Incoming Call...</span>
+        <button class="btn-green" style="width:auto; padding:5px 15px;" onclick="answerIncoming()">Answer</button>
+        <button class="btn-red" style="width:auto; padding:5px 15px;" onclick="document.getElementById('incoming-modal').style.display='none'">Ignore</button>
+    </div>
+
+    <div class="ribbon">
+        <div style="background:var(--red); height:100%; padding:0 15px; display:flex; align-items:center; font-weight:bold; font-size:12px;">DEADLINES</div>
+        <div class="ribbon-track" id="ribbon-track"></div>
+    </div>
+
+    <div class="grid">
+        
+        <div class="col">
+            <div style="padding:15px; border-bottom:1px solid #e2e8f0;">
+                <input class="inp" placeholder="Search ID or Email..." onchange="searchClient(this.value)">
+                <div style="font-size:11px; color:#64748b; font-weight:bold;">WAITING QUEUE</div>
+            </div>
+            <div id="queue-list" style="overflow-y:auto; flex:1;"></div>
+            
+            <div style="padding:10px; background:#fffbeb; border-top:1px solid #e2e8f0; height:150px; overflow-y:auto;">
+                <div style="font-size:11px; color:#b45309; font-weight:bold; margin-bottom:5px;">MISSED CALL LOG</div>
+                <div id="missed-log"></div>
+            </div>
+        </div>
+
+        <div class="col">
+            <div class="chat-header">
+                <span id="chat-title">Select a Chat</span>
+                <div id="chat-actions" style="display:none; gap:10px;">
+                    <span id="call-timer" style="font-family:monospace; font-size:14px; margin-right:10px;">00:00</span>
+                    <button class="btn-red" style="width:auto; padding:5px 10px;" onclick="endSession()">End Session</button>
+                </div>
+            </div>
+            <div class="chat-msgs" id="msg-area"></div>
+            <div style="padding:15px; border-top:1px solid #e2e8f0; display:flex; gap:10px;">
+                <input id="staff-input" class="inp" style="margin:0;" placeholder="Message..." onkeypress="if(event.key==='Enter') sendStaffMsg()">
+                <button class="btn" style="width:auto; padding:0 20px;" onclick="sendStaffMsg()">Send</button>
+            </div>
+        </div>
+
+        <div class="col-right">
+            <h4>Client Records</h4><br>
+            <label style="font-size:11px; font-weight:bold;">PASSPORT NUMBER</label>
+            <input id="rec-passport" class="inp">
+            
+            <label style="font-size:11px; font-weight:bold;">APPLICATION ID</label>
+            <input id="rec-appid" class="inp">
+            
+            <label style="font-size:11px; font-weight:bold;">NOTES</label>
+            <textarea id="rec-notes" class="inp" style="height:80px;"></textarea>
+            
+            <button class="btn-green" onclick="saveRecords()">Save Records</button>
+
+            <hr style="margin:20px 0; border:0; border-top:1px solid #e2e8f0;">
+
+            <h4>Set Deadline</h4><br>
+            <input id="task-note" class="inp" placeholder="Task Note">
+            <input id="task-date" type="date" class="inp">
+            <button class="btn" onclick="addTask()">Add to Ribbon</button>
+        </div>
+    </div>
+
+    <script src="supabase-config.js"></script>
+    <script>
+        let currentEmp = null;
+        let activeChatId = null;
+        let incomingCallId = null; // Stored when modal pops up
+        
+        let pc = null;
+        let callTimerInt = null;
+        let callSeconds = 0;
+
+        // --- 1. AUTH ---
+        async function staffLogin() {
+            const email = document.getElementById('e-email').value;
+            const pass = document.getElementById('e-pass').value;
+            const { data, error } = await supabase.auth.signInWithPassword({ email, password: pass });
+            if (error) return alert(error.message);
+            
+            currentEmp = data.user;
+            document.getElementById('login-overlay').style.display = 'none';
+            initDashboard();
+        }
+
+        // --- 2. INIT & LISTENERS ---
+        function initDashboard() {
+            // Queue
+            supabase.channel('public:chats').on('postgres_changes', { event: '*', schema: 'public', table: 'chats' }, refreshQueue).subscribe();
+            refreshQueue();
+
+            // Ribbon
+            supabase.channel('public:tasks').on('postgres_changes', { event: '*', schema: 'public', table: 'global_tasks' }, refreshRibbon).subscribe();
+            refreshRibbon();
+
+            // Calls Monitoring
+            supabase.channel('public:calls').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'calls', filter: `status=eq.calling` }, handleIncomingCall).subscribe();
+
+            // Missed Calls
+            supabase.channel('public:missed').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'missed_calls' }, handleMissedLog).subscribe();
+            loadMissedLog();
+        }
+
+        async function refreshQueue() {
+            const { data } = await supabase.from('chats').select('*, profiles(name, six_digit_id)').in('status', ['queued', 'active']).order('last_activity', {ascending: false});
+            const list = document.getElementById('queue-list');
+            list.innerHTML = '';
+            
+            data.forEach(chat => {
+                const div = document.createElement('div');
+                div.className = `queue-item ${activeChatId === chat.id ? 'active' : ''}`;
+                div.innerHTML = `
+                    <div style="font-weight:bold;">${chat.profiles.name} <span style="font-weight:normal; font-size:11px;">(#${chat.profiles.six_digit_id})</span></div>
+                    <div style="font-size:11px; margin-top:4px;">
+                        <span class="badge" style="${chat.status === 'active' ? 'background:#e0f2fe; color:#0369a1' : 'background:#fef3c7; color:#b45309'}">${chat.status.toUpperCase()}</span>
+                    </div>
+                `;
+                div.onclick = () => pickUpChat(chat.id, chat.user_id, chat.profiles.six_digit_id);
+                list.appendChild(div);
+            });
+        }
+
+        // --- 3. CHAT LOGIC ---
+        async function pickUpChat(chatId, userId, visualId) {
+            // Capacity Check
+            const { data: profile } = await supabase.from('profiles').select('active_chats').eq('id', currentEmp.id).single();
+            if ((profile.active_chats || 0) >= 2 && activeChatId !== chatId) {
+                return alert("Capacity Full (Max 2 Chats/Calls).");
+            }
+
+            activeChatId = chatId;
+            document.getElementById('chat-title').innerText = `Chatting with: #${visualId}`;
+            document.getElementById('chat-actions').style.display = 'flex';
+
+            // Mark Active & Assign
+            if(profile.active_chats < 2) {
+                await supabase.from('chats').update({ status: 'active', assigned_to: currentEmp.id }).eq('id', chatId);
+                await supabase.from('profiles').update({ active_chats: (profile.active_chats || 0) + 1 }).eq('id', currentEmp.id);
+            }
+
+            // Load Msgs
+            const { data: msgs } = await supabase.from('messages').select('*').eq('chat_id', chatId).order('created_at');
+            const box = document.getElementById('msg-area');
+            box.innerHTML = '';
+            msgs.forEach(renderMsg);
+
+            // Subscribe
+            supabase.channel(`chat:${chatId}`).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${chatId}` }, payload => renderMsg(payload.new)).subscribe();
+
+            // Load Secure Records
+            loadRecords(userId);
+        }
+
+        function renderMsg(msg) {
+            const box = document.getElementById('msg-area');
+            const div = document.createElement('div');
+            div.className = `msg ${msg.sender_id === currentEmp.id ? 'me' : 'client'}`;
+            div.innerText = msg.text;
+            box.appendChild(div);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        async function sendStaffMsg() {
+            const txt = document.getElementById('staff-input').value;
+            if(!txt || !activeChatId) return;
+            document.getElementById('staff-input').value = '';
+            await supabase.from('messages').insert({ chat_id: activeChatId, sender_id: currentEmp.id, text: txt });
+        }
+
+        async function endSession() {
+            if(!confirm("End this session?")) return;
+            await supabase.from('chats').update({ status: 'closed', assigned_to: null }).eq('id', activeChatId);
+            
+            // Decrement active count
+            const { data: profile } = await supabase.from('profiles').select('active_chats').eq('id', currentEmp.id).single();
+            await supabase.from('profiles').update({ active_chats: Math.max(0, (profile.active_chats || 1) - 1) }).eq('id', currentEmp.id);
+            
+            activeChatId = null;
+            document.getElementById('msg-area').innerHTML = '';
+            document.getElementById('chat-title').innerText = 'Select a Chat';
+            refreshQueue();
+        }
+
+        // --- 4. CALL LOGIC (ANSWERING) ---
+        async function handleIncomingCall(payload) {
+            const call = payload.new;
+            // Get Chat info to see if assigned to me
+            const { data: chat } = await supabase.from('chats').select('assigned_to').eq('id', call.chat_id).single();
+            
+            // If assigned to me OR unassigned (I can pick up)
+            if (chat.assigned_to === currentEmp.id || !chat.assigned_to) {
+                incomingCallId = call.id; // Calls table UUID
+                document.getElementById('incoming-modal').style.display = 'flex';
+                document.getElementById('inc-text').innerText = chat.assigned_to ? "Client calling you!" : "New Priority Call";
+                
+                // If I'm not on this chat, load it
+                if(activeChatId !== call.chat_id) {
+                     // Get user details for pickup
+                     const {data: c} = await supabase.from('chats').select('user_id, profiles(six_digit_id)').eq('id', call.chat_id).single();
+                     pickUpChat(call.chat_id, c.user_id, c.profiles.six_digit_id);
+                }
+            }
+        }
+
+        async function answerIncoming() {
+            document.getElementById('incoming-modal').style.display = 'none';
+            
+            const { data: call } = await supabase.from('calls').select('*').eq('id', incomingCallId).single();
+            
+            pc = new RTCPeerConnection(rtcConfig);
+            
+            // Send Candidates
+            pc.onicecandidate = async e => {
+                if(e.candidate) await supabase.from('ice_candidates').insert({ call_id: incomingCallId, candidate: e.candidate, sender_role: 'callee' });
+            };
+
+            // Play Audio
+            const remoteAudio = new Audio();
+            pc.ontrack = e => { remoteAudio.srcObject = e.streams[0]; remoteAudio.play(); };
+
+            await pc.setRemoteDescription(new RTCSessionDescription(call.offer));
+
+            // Get Mic
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+
+            // Update DB
+            await supabase.from('calls').update({ status: 'connected', answer: answer }).eq('id', incomingCallId);
+
+            // Listen for Candidates from Caller
+            supabase.channel(`ice:${incomingCallId}`).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ice_candidates', filter: `call_id=eq.${incomingCallId}` }, payload => {
+                if(payload.new.sender_role === 'caller') pc.addIceCandidate(new RTCIceCandidate(payload.new.candidate));
+            }).subscribe();
+
+            startTimer();
+        }
+
+        function startTimer() {
+            callSeconds = 0;
+            callTimerInt = setInterval(() => {
+                callSeconds++;
+                const mins = Math.floor(callSeconds / 60).toString().padStart(2, '0');
+                const secs = (callSeconds % 60).toString().padStart(2, '0');
+                document.getElementById('call-timer').innerText = `${mins}:${secs}`;
+            }, 1000);
+        }
+
+        // --- 5. DETAILS & RIBBON ---
+        async function loadRecords(userId) {
+            const { data } = await supabase.from('secure_records').select('*').eq('client_uid', userId).single();
+            document.getElementById('rec-passport').value = data?.passport_number || '';
+            document.getElementById('rec-appid').value = data?.application_id || '';
+            document.getElementById('rec-notes').value = data?.notes || '';
+        }
+
+        async function saveRecords() {
+            if(!activeChatId) return;
+            const { data: chat } = await supabase.from('chats').select('user_id').eq('id', activeChatId).single();
+            
+            await supabase.from('secure_records').upsert({
+                client_uid: chat.user_id,
+                passport_number: document.getElementById('rec-passport').value,
+                application_id: document.getElementById('rec-appid').value,
+                notes: document.getElementById('rec-notes').value,
+                updated_by: currentEmp.email
+            });
+            alert("Saved.");
+        }
+
+        async function refreshRibbon() {
+            const { data } = await supabase.from('global_tasks').select('*').eq('status', 'pending');
+            const track = document.getElementById('ribbon-track');
+            track.innerHTML = '';
+            data.forEach(t => {
+                const span = document.createElement('span');
+                span.className = 'ribbon-item';
+                span.innerText = `${t.note} (${new Date(t.deadline).toLocaleDateString()}) | `;
+                track.appendChild(span);
+            });
+        }
+        
+        async function addTask() {
+            const note = document.getElementById('task-note').value;
+            const date = document.getElementById('task-date').value;
+            if(note && date) {
+                // Determine Client ID from active chat
+                const { data: chat } = await supabase.from('chats').select('user_id').eq('id', activeChatId).single();
+                await supabase.from('global_tasks').insert({ client_uid: chat.user_id, note, deadline: date });
+                alert("Task Added");
+            }
+        }
+
+        // --- 6. SEARCH & MISSED ---
+        async function searchClient(query) {
+            // Find user by email or ID
+            const { data } = await supabase.from('profiles').select('id').or(`email.eq.${query},six_digit_id.eq.${query}`).single();
+            if(data) {
+                // Find active chat for them
+                const { data: chat } = await supabase.from('chats').select('*, profiles(six_digit_id)').eq('user_id', data.id).single();
+                if(chat) pickUpChat(chat.id, data.id, chat.profiles.six_digit_id);
+                else alert("No active chat for this user.");
+            } else alert("Not found.");
+        }
+
+        async function loadMissedLog() {
+            const { data } = await supabase.from('missed_calls').select('*, profiles(name)').eq('status', 'new').order('timestamp', {ascending: false});
+            const div = document.getElementById('missed-log');
+            div.innerHTML = '';
+            data.forEach(m => {
+                const item = document.createElement('div');
+                item.style.padding = "5px"; item.style.borderBottom = "1px solid #ddd"; item.style.fontSize="11px";
+                item.innerHTML = `<b>${m.profiles.name}</b>: ${m.client_message} <br><span style="color:#666">${new Date(m.timestamp).toLocaleTimeString()}</span>`;
+                div.appendChild(item);
+            });
+        }
+        
+        function handleMissedLog(payload) { loadMissedLog(); }
+
+    </script>
+</body>
+</html>
