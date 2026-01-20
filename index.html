@@ -27,8 +27,7 @@
         .queue-item:hover { background: #f8fafc; }
         .queue-item.active { background: #ecfeff; border-left: 4px solid var(--primary); }
         .badge { font-size: 10px; padding: 3px 6px; background: #e2e8f0; border-radius: 4px; }
-        .badge.call { background: var(--red); color: white; animation: blink 1s infinite; }
-
+        
         /* CHAT */
         .chat-header { padding: 15px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; }
         .chat-msgs { flex: 1; background: #f8fafc; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 10px; }
@@ -95,10 +94,21 @@
                     <button class="btn-red" style="width:auto; padding:5px 10px;" onclick="endSession()">End Session</button>
                 </div>
             </div>
+            
             <div class="chat-msgs" id="msg-area"></div>
-            <div style="padding:15px; border-top:1px solid #e2e8f0; display:flex; gap:10px;">
-                <input id="staff-input" class="inp" style="margin:0;" placeholder="Message..." onkeypress="if(event.key==='Enter') sendStaffMsg()">
-                <button class="btn" style="width:auto; padding:0 20px;" onclick="sendStaffMsg()">Send</button>
+            
+            <div style="padding:15px; border-top:1px solid #e2e8f0; display:flex; flex-direction:column; gap:5px;">
+                <div id="staff-file-preview" style="display:none; font-size:12px; color:#64748b;">
+                    <span id="staff-file-name"></span> <button onclick="clearStaffFile()" style="color:red; border:none; cursor:pointer;">(x)</button>
+                </div>
+
+                <div style="display:flex; gap:10px; align-items:center;">
+                    <input type="file" id="staff-file-input" hidden accept=".jpg, .jpeg, .png, .heic, .mp4, .mov, .pdf, .docx" onchange="handleStaffFile()">
+                    <button onclick="document.getElementById('staff-file-input').click()" style="background:none; border:none; cursor:pointer; font-size:20px;" title="Attach">📎</button>
+                    
+                    <input id="staff-input" class="inp" style="margin:0;" placeholder="Message..." onkeypress="if(event.key==='Enter') sendStaffMsg()">
+                    <button class="btn" style="width:auto; padding:0 20px;" onclick="sendStaffMsg()">Send</button>
+                </div>
             </div>
         </div>
 
@@ -128,8 +138,8 @@
     <script>
         let currentEmp = null;
         let activeChatId = null;
-        let incomingCallId = null; // Stored when modal pops up
-        
+        let incomingCallId = null;
+        let staffFile = null;
         let pc = null;
         let callTimerInt = null;
         let callSeconds = 0;
@@ -148,18 +158,14 @@
 
         // --- 2. INIT & LISTENERS ---
         function initDashboard() {
-            // Queue
             supabase.channel('public:chats').on('postgres_changes', { event: '*', schema: 'public', table: 'chats' }, refreshQueue).subscribe();
             refreshQueue();
 
-            // Ribbon
             supabase.channel('public:tasks').on('postgres_changes', { event: '*', schema: 'public', table: 'global_tasks' }, refreshRibbon).subscribe();
             refreshRibbon();
 
-            // Calls Monitoring
             supabase.channel('public:calls').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'calls', filter: `status=eq.calling` }, handleIncomingCall).subscribe();
 
-            // Missed Calls
             supabase.channel('public:missed').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'missed_calls' }, handleMissedLog).subscribe();
             loadMissedLog();
         }
@@ -185,7 +191,6 @@
 
         // --- 3. CHAT LOGIC ---
         async function pickUpChat(chatId, userId, visualId) {
-            // Capacity Check
             const { data: profile } = await supabase.from('profiles').select('active_chats').eq('id', currentEmp.id).single();
             if ((profile.active_chats || 0) >= 2 && activeChatId !== chatId) {
                 return alert("Capacity Full (Max 2 Chats/Calls).");
@@ -195,46 +200,96 @@
             document.getElementById('chat-title').innerText = `Chatting with: #${visualId}`;
             document.getElementById('chat-actions').style.display = 'flex';
 
-            // Mark Active & Assign
             if(profile.active_chats < 2) {
                 await supabase.from('chats').update({ status: 'active', assigned_to: currentEmp.id }).eq('id', chatId);
                 await supabase.from('profiles').update({ active_chats: (profile.active_chats || 0) + 1 }).eq('id', currentEmp.id);
             }
 
-            // Load Msgs
             const { data: msgs } = await supabase.from('messages').select('*').eq('chat_id', chatId).order('created_at');
             const box = document.getElementById('msg-area');
             box.innerHTML = '';
             msgs.forEach(renderMsg);
 
-            // Subscribe
             supabase.channel(`chat:${chatId}`).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${chatId}` }, payload => renderMsg(payload.new)).subscribe();
 
-            // Load Secure Records
             loadRecords(userId);
+        }
+
+        function handleStaffFile() {
+            const file = document.getElementById('staff-file-input').files[0];
+            if(file) {
+                staffFile = file;
+                document.getElementById('staff-file-preview').style.display = 'block';
+                document.getElementById('staff-file-name').innerText = file.name;
+            }
+        }
+
+        function clearStaffFile() {
+            staffFile = null;
+            document.getElementById('staff-file-input').value = '';
+            document.getElementById('staff-file-preview').style.display = 'none';
+        }
+
+        async function sendStaffMsg() {
+            const txt = document.getElementById('staff-input').value;
+            if(!txt && !staffFile) return;
+            if(!activeChatId) return;
+
+            let fileUrl = null;
+            let fileType = null;
+
+            if (staffFile) {
+                const ext = staffFile.name.split('.').pop();
+                const fileName = `staff_${Date.now()}.${ext}`;
+                const { error } = await supabase.storage.from('chat_files').upload(fileName, staffFile);
+                if(error) return alert("Upload Error: " + error.message);
+                
+                const { data } = supabase.storage.from('chat_files').getPublicUrl(fileName);
+                fileUrl = data.publicUrl;
+                
+                if(['jpg','png','jpeg','heic'].includes(ext)) fileType = 'image';
+                else if(['mp4','mov'].includes(ext)) fileType = 'video';
+                else fileType = 'doc';
+            }
+
+            await supabase.from('messages').insert({ 
+                chat_id: activeChatId, 
+                sender_id: currentEmp.id, 
+                text: txt,
+                file_url: fileUrl,
+                file_type: fileType
+            });
+
+            document.getElementById('staff-input').value = '';
+            clearStaffFile();
         }
 
         function renderMsg(msg) {
             const box = document.getElementById('msg-area');
             const div = document.createElement('div');
             div.className = `msg ${msg.sender_id === currentEmp.id ? 'me' : 'client'}`;
-            div.innerText = msg.text;
+            
+            let content = msg.text ? `<div>${msg.text}</div>` : '';
+            
+            if (msg.file_url) {
+                if (msg.file_type === 'image') {
+                    content += `<a href="${msg.file_url}" target="_blank"><img src="${msg.file_url}" style="max-width:200px; border-radius:8px; margin-top:5px;"></a>`;
+                } else if (msg.file_type === 'video') {
+                     content += `<video controls src="${msg.file_url}" style="max-width:200px; border-radius:8px; margin-top:5px;"></video>`;
+                } else {
+                    content += `<a href="${msg.file_url}" target="_blank" style="display:block; margin-top:5px; color:#0369a1; text-decoration:underline;">📄 Download File</a>`;
+                }
+            }
+
+            div.innerHTML = content;
             box.appendChild(div);
             box.scrollTop = box.scrollHeight;
-        }
-
-        async function sendStaffMsg() {
-            const txt = document.getElementById('staff-input').value;
-            if(!txt || !activeChatId) return;
-            document.getElementById('staff-input').value = '';
-            await supabase.from('messages').insert({ chat_id: activeChatId, sender_id: currentEmp.id, text: txt });
         }
 
         async function endSession() {
             if(!confirm("End this session?")) return;
             await supabase.from('chats').update({ status: 'closed', assigned_to: null }).eq('id', activeChatId);
             
-            // Decrement active count
             const { data: profile } = await supabase.from('profiles').select('active_chats').eq('id', currentEmp.id).single();
             await supabase.from('profiles').update({ active_chats: Math.max(0, (profile.active_chats || 1) - 1) }).eq('id', currentEmp.id);
             
@@ -244,21 +299,17 @@
             refreshQueue();
         }
 
-        // --- 4. CALL LOGIC (ANSWERING) ---
+        // --- 4. CALL LOGIC ---
         async function handleIncomingCall(payload) {
             const call = payload.new;
-            // Get Chat info to see if assigned to me
             const { data: chat } = await supabase.from('chats').select('assigned_to').eq('id', call.chat_id).single();
             
-            // If assigned to me OR unassigned (I can pick up)
             if (chat.assigned_to === currentEmp.id || !chat.assigned_to) {
-                incomingCallId = call.id; // Calls table UUID
+                incomingCallId = call.id; 
                 document.getElementById('incoming-modal').style.display = 'flex';
                 document.getElementById('inc-text').innerText = chat.assigned_to ? "Client calling you!" : "New Priority Call";
                 
-                // If I'm not on this chat, load it
                 if(activeChatId !== call.chat_id) {
-                     // Get user details for pickup
                      const {data: c} = await supabase.from('chats').select('user_id, profiles(six_digit_id)').eq('id', call.chat_id).single();
                      pickUpChat(call.chat_id, c.user_id, c.profiles.six_digit_id);
                 }
@@ -267,33 +318,27 @@
 
         async function answerIncoming() {
             document.getElementById('incoming-modal').style.display = 'none';
-            
             const { data: call } = await supabase.from('calls').select('*').eq('id', incomingCallId).single();
             
-            pc = new RTCPeerConnection(rtcConfig);
+            pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun1.l.google.com:19302' }] });
             
-            // Send Candidates
             pc.onicecandidate = async e => {
                 if(e.candidate) await supabase.from('ice_candidates').insert({ call_id: incomingCallId, candidate: e.candidate, sender_role: 'callee' });
             };
 
-            // Play Audio
             const remoteAudio = new Audio();
             pc.ontrack = e => { remoteAudio.srcObject = e.streams[0]; remoteAudio.play(); };
 
             await pc.setRemoteDescription(new RTCSessionDescription(call.offer));
 
-            // Get Mic
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
 
-            // Update DB
             await supabase.from('calls').update({ status: 'connected', answer: answer }).eq('id', incomingCallId);
 
-            // Listen for Candidates from Caller
             supabase.channel(`ice:${incomingCallId}`).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ice_candidates', filter: `call_id=eq.${incomingCallId}` }, payload => {
                 if(payload.new.sender_role === 'caller') pc.addIceCandidate(new RTCIceCandidate(payload.new.candidate));
             }).subscribe();
@@ -311,7 +356,7 @@
             }, 1000);
         }
 
-        // --- 5. DETAILS & RIBBON ---
+        // --- 5. DETAILS & MISC ---
         async function loadRecords(userId) {
             const { data } = await supabase.from('secure_records').select('*').eq('client_uid', userId).single();
             document.getElementById('rec-passport').value = data?.passport_number || '';
@@ -322,7 +367,6 @@
         async function saveRecords() {
             if(!activeChatId) return;
             const { data: chat } = await supabase.from('chats').select('user_id').eq('id', activeChatId).single();
-            
             await supabase.from('secure_records').upsert({
                 client_uid: chat.user_id,
                 passport_number: document.getElementById('rec-passport').value,
@@ -349,39 +393,10 @@
             const note = document.getElementById('task-note').value;
             const date = document.getElementById('task-date').value;
             if(note && date) {
-                // Determine Client ID from active chat
                 const { data: chat } = await supabase.from('chats').select('user_id').eq('id', activeChatId).single();
                 await supabase.from('global_tasks').insert({ client_uid: chat.user_id, note, deadline: date });
                 alert("Task Added");
             }
         }
 
-        // --- 6. SEARCH & MISSED ---
-        async function searchClient(query) {
-            // Find user by email or ID
-            const { data } = await supabase.from('profiles').select('id').or(`email.eq.${query},six_digit_id.eq.${query}`).single();
-            if(data) {
-                // Find active chat for them
-                const { data: chat } = await supabase.from('chats').select('*, profiles(six_digit_id)').eq('user_id', data.id).single();
-                if(chat) pickUpChat(chat.id, data.id, chat.profiles.six_digit_id);
-                else alert("No active chat for this user.");
-            } else alert("Not found.");
-        }
-
-        async function loadMissedLog() {
-            const { data } = await supabase.from('missed_calls').select('*, profiles(name)').eq('status', 'new').order('timestamp', {ascending: false});
-            const div = document.getElementById('missed-log');
-            div.innerHTML = '';
-            data.forEach(m => {
-                const item = document.createElement('div');
-                item.style.padding = "5px"; item.style.borderBottom = "1px solid #ddd"; item.style.fontSize="11px";
-                item.innerHTML = `<b>${m.profiles.name}</b>: ${m.client_message} <br><span style="color:#666">${new Date(m.timestamp).toLocaleTimeString()}</span>`;
-                div.appendChild(item);
-            });
-        }
-        
-        function handleMissedLog(payload) { loadMissedLog(); }
-
-    </script>
-</body>
-</html>
+        async function searchClient(query
