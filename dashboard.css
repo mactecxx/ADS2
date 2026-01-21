@@ -1,0 +1,211 @@
+:root {
+    --bg-dark: #0f172a;
+    --bg-light: #f1f5f9;
+    --primary: #0891b2; /* Matches Client Theme */
+    --danger: #ef4444;
+    --success: #22c55e;
+    --text-main: #334155;
+    --sidebar-width: 280px;
+    --details-width: 320px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { 
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+    background: var(--bg-light); 
+    height: 100vh; 
+    overflow: hidden; 
+    display: flex; 
+    flex-direction: column; 
+}
+
+/* --- 1. THE RIBBON (DEADLINES) --- */
+.ribbon-container {
+    background: var(--bg-dark);
+    color: white;
+    height: 40px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    position: relative;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    z-index: 10;
+}
+.ribbon-track {
+    display: flex;
+    gap: 50px;
+    animation: scroll-left 30s linear infinite;
+    white-space: nowrap;
+    padding-left: 100%;
+}
+.ribbon-item {
+    font-size: 13px;
+    background: rgba(255,255,255,0.1);
+    padding: 4px 12px;
+    border-radius: 15px;
+    cursor: pointer;
+    border: 1px solid #475569;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.ribbon-item:hover { background: rgba(255,255,255,0.2); }
+.ribbon-item.urgent { border-color: var(--danger); color: #fca5a5; }
+
+@keyframes scroll-left {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-100%); }
+}
+
+/* --- 2. MAIN GRID --- */
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: var(--sidebar-width) 1fr var(--details-width); 
+    flex: 1;
+    height: calc(100vh - 40px);
+}
+
+/* --- COLUMN 1: QUEUE & SIDEBAR --- */
+.sidebar {
+    background: white;
+    border-right: 1px solid #e2e8f0;
+    display: flex;
+    flex-direction: column;
+}
+
+.search-box { padding: 15px; border-bottom: 1px solid #e2e8f0; background: #f8fafc; }
+.search-input { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; outline: none; }
+
+.section-title { 
+    font-size: 11px; font-weight: 700; color: #94a3b8; 
+    padding: 15px 15px 5px; text-transform: uppercase; letter-spacing: 0.5px; 
+}
+
+.queue-list { overflow-y: auto; flex: 1; }
+.queue-item {
+    padding: 12px 15px;
+    border-bottom: 1px solid #f1f5f9;
+    cursor: pointer;
+    transition: background 0.2s;
+    position: relative;
+}
+.queue-item:hover { background: #f8fafc; }
+.queue-item.active { background: #ecfeff; border-left: 3px solid var(--primary); }
+
+.q-name { font-weight: 600; font-size: 14px; color: var(--text-main); }
+.q-meta { font-size: 11px; color: #64748b; display: flex; justify-content: space-between; margin-top: 4px; }
+
+.badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: #e2e8f0; }
+.badge.new { background: var(--success); color: white; }
+.badge.missed { background: var(--danger); color: white; animation: pulse 2s infinite; }
+
+@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
+
+/* --- COLUMN 2: ACTIVE CHAT --- */
+.chat-area {
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+    position: relative;
+}
+.chat-header {
+    padding: 15px;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: white;
+}
+.chat-actions button {
+    padding: 6px 12px;
+    border: 1px solid #cbd5e1;
+    background: white;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-left: 5px;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+.chat-actions button:hover { background: #f1f5f9; }
+.btn-end { color: var(--danger); border-color: #fee2e2; }
+.btn-call { background: var(--bg-dark) !important; color: white !important; border: none; }
+
+.messages-container {
+    flex: 1;
+    background: #f8fafc;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+.msg-bubble {
+    max-width: 70%;
+    padding: 12px 16px;
+    border-radius: 12px;
+    font-size: 14px;
+    line-height: 1.5;
+    position: relative;
+}
+.msg-bubble.client { align-self: flex-start; background: white; border: 1px solid #e2e8f0; border-bottom-left-radius: 2px; }
+.msg-bubble.employee { align-self: flex-end; background: var(--primary); color: white; border-bottom-right-radius: 2px; }
+.msg-time { font-size: 10px; opacity: 0.7; margin-top: 5px; display: block; text-align: right; }
+
+.input-zone {
+    padding: 15px;
+    border-top: 1px solid #e2e8f0;
+    display: flex;
+    gap: 10px;
+    background: white;
+}
+
+/* --- COLUMN 3: SECURE DETAILS --- */
+.details-panel {
+    background: white;
+    border-left: 1px solid #e2e8f0;
+    padding: 20px;
+    overflow-y: auto;
+}
+.field-group { margin-bottom: 20px; }
+.field-label { display: block; font-size: 11px; font-weight: 700; color: #64748b; margin-bottom: 6px; text-transform: uppercase; }
+
+.secure-input {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    font-family: monospace;
+    background: #f8fafc;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+.secure-input:focus { background: white; border-color: var(--primary); outline: none; }
+
+.notes-box {
+    width: 100%;
+    height: 120px;
+    padding: 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    resize: vertical;
+    font-size: 13px;
+    background: #fffbeb; /* Light yellow for notes */
+}
+
+/* LOGIN SCREEN */
+#login-screen {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: var(--bg-dark); z-index: 2000;
+    display: flex; justify-content: center; align-items: center;
+}
+.login-card { background: white; padding: 40px; border-radius: 12px; width: 350px; text-align: center; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1); }
+.login-input { width: 100%; padding: 12px; margin-bottom: 15px; border: 1px solid #cbd5e1; border-radius: 6px; }
+
+/* CALL MODAL */
+#incoming-call-modal {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    background: #1e293b; color: white; padding: 15px 30px;
+    border-radius: 50px; display: none; align-items: center; gap: 20px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4); z-index: 5000;
+}
+.pulse-ring { width: 10px; height: 10px; background: #ef4444; border-radius: 50%; animation: pulse 1s infinite; }
