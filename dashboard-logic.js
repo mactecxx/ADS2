@@ -271,4 +271,46 @@ async function loadRibbon() {
         data.forEach(d => {
             const date = new Date(d.deadline).toLocaleDateString();
             const item = document.createElement('div');
-            item.className = 'ribbon-
+            item.className = 'ribbon-item'; // Exact CSS class
+            if(new Date(d.deadline) < new Date()) item.classList.add('urgent');
+            item.innerHTML = `<span>UID: ...${d.client_uid ? d.client_uid.substring(0,4) : '???'}</span> | <b>${d.note}</b> | <span>${date}</span>`;
+            track.appendChild(item);
+        });
+    }
+}
+
+// --- 7. MISSED CALLS ---
+function setupMissedCalls() {
+    supabase.channel('missed-calls-rt')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'missed_calls' }, () => refreshMissed())
+        .subscribe();
+    refreshMissed();
+}
+
+async function refreshMissed() {
+    const { data } = await supabase.from('missed_calls').select('*').eq('status', 'unattended');
+    const list = document.getElementById('queue-missed');
+    list.innerHTML = '';
+    
+    if(data) {
+        data.forEach(d => {
+            const div = document.createElement('div');
+            div.className = 'queue-item';
+            div.innerHTML = `
+                <div class="q-name" style="color:var(--danger)">MISSED CALL</div>
+                <div class="q-meta">${new Date(d.created_at).toLocaleTimeString()}</div>
+            `;
+            div.onclick = async () => {
+                await supabase.from('missed_calls').update({ status: 'attended' }).eq('id', d.id);
+            };
+            list.appendChild(div);
+        });
+    }
+}
+
+async function searchClient(query) {
+    // Search by exact UID Display (the 6 digit code)
+    const { data } = await supabase.from('conversations').select('*').eq('uid_display', query).single();
+    if(data) pickUpChat(data.id, 'search');
+    else alert("Client not found.");
+}
