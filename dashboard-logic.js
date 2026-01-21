@@ -1,15 +1,16 @@
-// --- INITIALIZATION ---
+// --- CONFIGURATION ---
 if (typeof _CONFIG === 'undefined') alert("Error: config.js missing");
 const supabase = window.supabase.createClient(_CONFIG.supabaseUrl, _CONFIG.supabaseKey);
 
 let currentEmp = null;
 let activeChatId = null;
-let chatSubscription = null;
+let currentChatChannel = null; // Store subscription to unsubscribe later
 
 // --- 1. AUTHENTICATION ---
 window.addEventListener('load', async () => {
-    // Check session
+    // Check if session exists
     const { data: { session } } = await supabase.auth.getSession();
+    
     if (session) {
         verifyEmployee(session.user);
     } else {
@@ -18,28 +19,21 @@ window.addEventListener('load', async () => {
 });
 
 async function empLogin() {
-    const email = document.getElementById('e-email').value;
-    const pass = document.getElementById('e-pass').value;
+    const e = document.getElementById('e-email').value;
+    const p = document.getElementById('e-pass').value;
     
-    const { data, error } = await supabase.auth.signInWithPassword({ 
-        email: email, 
-        password: pass 
-    });
-
+    const { data, error } = await supabase.auth.signInWithPassword({ email: e, password: p });
+    
     if (error) {
-        document.getElementById('login-error').innerText = error.message;
+        document.getElementById('login-error').innerText = "Login Failed: " + error.message;
     } else {
         verifyEmployee(data.user);
     }
 }
 
 async function verifyEmployee(user) {
-    // Check 'employees' table to enforce role
-    const { data: emp, error } = await supabase
-        .from('employees')
-        .select('*')
-        .eq('id', user.id)
-        .single();
+    // Check 'employees' table (replaces db.collection('employees'))
+    const { data: emp, error } = await supabase.from('employees').select('*').eq('id', user.id).single();
 
     if (emp) {
         currentEmp = emp;
@@ -51,11 +45,11 @@ async function verifyEmployee(user) {
     }
 }
 
-// --- 2. DASHBOARD INIT ---
+// --- 2. DASHBOARD INITIALIZATION ---
 function initDashboard() {
-    setupQueues();      // Listen to 'conversations'
-    setupRibbon();      // Listen to 'global_tasks'
-    setupMissedCalls(); // Listen to 'missed_calls'
+    setupRibbon();
+    setupQueues();
+    setupMissedCalls();
     
     // Set Status Online
     supabase.from('employees').update({ 
@@ -69,62 +63,53 @@ function initDashboard() {
     });
 }
 
-// --- 3. QUEUE SYSTEM ---
+// --- 3. QUEUE SYSTEM (Replicates Snapshots) ---
 function setupQueues() {
-    // We listen to the entire 'conversations' table for changes
-    // In Supabase, we can filter in the listener or just refresh logic on any change
-    const channel = supabase.channel('dashboard-queues')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, payload => {
-            refreshQueues();
+    // Listen to ALL changes in 'conversations' table
+    supabase.channel('public:conversations')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => {
+            refreshQueues(); // Refresh UI whenever DB changes
         })
         .subscribe();
-        
-    refreshQueues(); // Initial load
+    
+    refreshQueues(); // Initial Fetch
 }
 
 async function refreshQueues() {
-    // A. Waiting Queue (Status: 'queued')
-    const { data: waiting } = await supabase
-        .from('conversations')
-        .select('*')
-        .eq('status', 'queued')
-        .order('last_message_at', { ascending: true });
-
-    renderQueueList(waiting, 'queue-waiting', 'waiting');
+    // A. Waiting Queue
+    const { data: waiting } = await supabase.from('conversations')
+        .select('*').eq('status', 'queued').order('last_activity', { ascending: true });
+    
+    const wList = document.getElementById('queue-waiting');
+    wList.innerHTML = '';
+    if(waiting) waiting.forEach(doc => renderQueueItem(doc, wList, 'waiting'));
 
     // B. My Active Chats
-    const { data: active } = await supabase
-        .from('conversations')
-        .select('*')
-        .eq('assigned_to', currentEmp.id)
-        .eq('status', 'active');
-        
-    renderQueueList(active, 'queue-active', 'active');
+    const { data: active } = await supabase.from('conversations')
+        .select('*').eq('assigned_to', currentEmp.id).eq('status', 'active');
     
-    // Update my active count in DB
+    const aList = document.getElementById('queue-active');
+    aList.innerHTML = '';
     if(active) {
+        active.forEach(doc => renderQueueItem(doc, aList, 'active'));
+        // Sync Count
         supabase.from('employees').update({ active_chat_count: active.length }).eq('id', currentEmp.id);
     }
 }
 
-function renderQueueList(data, elemId, type) {
-    const list = document.getElementById(elemId);
-    list.innerHTML = '';
-    if(!data) return;
-
-    data.forEach(chat => {
-        const div = document.createElement('div');
-        div.className = `queue-item ${activeChatId === chat.id ? 'active' : ''}`;
-        div.innerHTML = `
-            <div class="q-name">${chat.user_name || 'Guest User'}</div>
-            <div class="q-meta">
-                <span>UID: ${chat.uid_display || '...'}</span>
-                <span class="badge ${type === 'waiting' ? 'new' : ''}">${type.toUpperCase()}</span>
-            </div>
-        `;
-        div.onclick = () => pickUpChat(chat.id, type);
-        list.appendChild(div);
-    });
+function renderQueueItem(d, container, type) {
+    const div = document.createElement('div');
+    // Keeps EXACT CSS classes from original
+    div.className = `queue-item ${activeChatId === d.id ? 'active' : ''}`;
+    div.innerHTML = `
+        <div class="q-name">${d.user_name || 'Guest User'}</div>
+        <div class="q-meta">
+            <span>UID: ${d.uid_display || '...'}</span>
+            <span class="badge ${type === 'waiting' ? 'new' : ''}">${type.toUpperCase()}</span>
+        </div>
+    `;
+    div.onclick = () => pickUpChat(d.id, type);
+    container.appendChild(div);
 }
 
 // --- 4. PICKUP LOGIC ---
@@ -135,10 +120,10 @@ async function pickUpChat(chatId, type) {
         // Check Limit
         const { data: me } = await supabase.from('employees').select('active_chat_count').eq('id', currentEmp.id).single();
         if ((me?.active_chat_count || 0) >= 2) {
-            return alert("⛔ LIMIT REACHED: Finish a chat first.");
+            return alert("⛔ LIMIT REACHED: You are handling 2 chats. Please finish one.");
         }
         
-        // Assign to me
+        // Assign
         await supabase.from('conversations').update({
             assigned_to: currentEmp.id,
             status: 'active'
@@ -150,20 +135,20 @@ async function pickUpChat(chatId, type) {
     loadSecureDetails(chatId);
 }
 
-// --- 5. CHAT UI ---
+// --- 5. CHAT UI (Replicates Messages Snapshot) ---
 function loadChatUI(chatId) {
-    document.getElementById('header-title').innerText = "Chatting with UID: " + chatId.substring(0,8);
+    // 1. Unsubscribe previous
+    if (currentChatChannel) supabase.removeChannel(currentChatChannel);
+
+    document.getElementById('header-title').innerText = "Chatting with UID: " + chatId.substring(0,6);
     const msgArea = document.getElementById('msg-area');
     msgArea.innerHTML = '';
 
-    // Unsubscribe previous listener if exists
-    if(chatSubscription) supabase.removeChannel(chatSubscription);
+    // 2. Load History
+    loadHistory(chatId);
 
-    // Load History First
-    loadMessageHistory(chatId);
-
-    // Subscribe to new messages
-    chatSubscription = supabase.channel(`chat:${chatId}`)
+    // 3. Listen for NEW messages
+    currentChatChannel = supabase.channel(`chat:${chatId}`)
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` }, 
         payload => {
             renderMessage(payload.new);
@@ -171,27 +156,25 @@ function loadChatUI(chatId) {
         .subscribe();
 }
 
-async function loadMessageHistory(chatId) {
-    const { data: msgs } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('conversation_id', chatId)
-        .order('created_at', { ascending: true });
-        
+async function loadHistory(chatId) {
+    const { data: msgs } = await supabase.from('messages')
+        .select('*').eq('conversation_id', chatId).order('created_at', { ascending: true });
+    
     if(msgs) msgs.forEach(msg => renderMessage(msg));
 }
 
-function renderMessage(msg) {
-    const area = document.getElementById('msg-area');
-    const isMe = msg.sender_id === currentEmp.id;
-    const time = new Date(msg.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+function renderMessage(d) {
+    const msgArea = document.getElementById('msg-area');
+    const time = new Date(d.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
     
-    area.innerHTML += `
+    // Uses EXACT CSS classes: 'msg-bubble', 'employee', 'client'
+    const isMe = d.sender_id === currentEmp.id;
+    msgArea.innerHTML += `
         <div class="msg-bubble ${isMe ? 'employee' : 'client'}">
-            ${msg.text || '[Attachment]'}
+            ${d.text}
             <span class="msg-time">${time}</span>
         </div>`;
-    area.scrollTop = area.scrollHeight;
+    msgArea.scrollTop = msgArea.scrollHeight;
 }
 
 async function sendEmpMessage() {
@@ -209,49 +192,53 @@ async function sendEmpMessage() {
 
 async function closeActiveChat() {
     if(!activeChatId) return;
-    if(confirm("End this session?")) {
+    if(confirm("End this session? It will be removed from your active queue.")) {
         await supabase.from('conversations').update({ status: 'closed', assigned_to: null }).eq('id', activeChatId);
         activeChatId = null;
         document.getElementById('msg-area').innerHTML = '<div style="text-align:center; color:#94a3b8; margin-top:50px;">Select a client from the queue.</div>';
         document.getElementById('header-title').innerText = 'Select a Chat';
-        document.getElementById('inp-passport').value = '';
-        document.getElementById('inp-appid').value = '';
-        document.getElementById('inp-notes').value = '';
+        clearSecureInputs();
     }
 }
 
 // --- 6. SECURE DETAILS & RIBBON ---
-async function loadSecureDetails(uid) {
-    // We need to map Conversation ID -> Client UID first
-    const { data: conv } = await supabase.from('conversations').select('user_id').eq('id', uid).single();
+async function loadSecureDetails(chatId) {
+    // Map Conversation ID -> Client User ID
+    const { data: conv } = await supabase.from('conversations').select('user_id').eq('id', chatId).single();
     if(!conv) return;
 
-    const { data: record } = await supabase.from('secure_records').select('*').eq('client_uid', conv.user_id).single();
+    // Fetch Secure Record
+    const { data: rec } = await supabase.from('secure_records').select('*').eq('client_uid', conv.user_id).single();
     
-    document.getElementById('inp-passport').value = record?.passport_number || '';
-    document.getElementById('inp-appid').value = record?.application_id || '';
-    document.getElementById('inp-notes').value = record?.notes || '';
+    document.getElementById('inp-passport').value = rec?.passport_number || '';
+    document.getElementById('inp-appid').value = rec?.application_id || '';
+    document.getElementById('inp-notes').value = rec?.notes || '';
+}
+
+function clearSecureInputs() {
+    document.getElementById('inp-passport').value = '';
+    document.getElementById('inp-appid').value = '';
+    document.getElementById('inp-notes').value = '';
 }
 
 async function saveSecureDetails() {
     if(!activeChatId) return alert("Select a chat first.");
     
-    // Get Client UID again
     const { data: conv } = await supabase.from('conversations').select('user_id').eq('id', activeChatId).single();
     if(!conv) return;
 
     const updates = {
-        client_uid: conv.user_id, // Ensure this is set for upsert
+        client_uid: conv.user_id,
         passport_number: document.getElementById('inp-passport').value,
         application_id: document.getElementById('inp-appid').value,
         notes: document.getElementById('inp-notes').value,
         updated_by: currentEmp.name
     };
 
-    // Upsert (Insert or Update)
+    // Upsert
     await supabase.from('secure_records').upsert(updates);
 
-    // Handle Ribbon Deadline
+    // Ribbon
     const deadline = document.getElementById('inp-deadline').value;
     if (deadline) {
         await supabase.from('global_tasks').insert([{
@@ -267,78 +254,21 @@ async function saveSecureDetails() {
 }
 
 function setupRibbon() {
-    supabase.channel('ribbon-updates')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'global_tasks' }, () => loadRibbonItems())
+    // Listen for ribbon changes
+    supabase.channel('ribbon-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'global_tasks' }, () => loadRibbon())
         .subscribe();
-    loadRibbonItems();
+    loadRibbon();
 }
 
-async function loadRibbonItems() {
+async function loadRibbon() {
     const { data } = await supabase.from('global_tasks')
-        .select('*')
-        .eq('status', 'pending')
-        .order('deadline', { ascending: true });
+        .select('*').eq('status', 'pending').order('deadline', { ascending: true });
         
     const track = document.getElementById('ribbon-track');
     track.innerHTML = '';
     if(data) {
-        data.forEach(task => {
+        data.forEach(d => {
+            const date = new Date(d.deadline).toLocaleDateString();
             const item = document.createElement('div');
-            item.className = 'ribbon-item';
-            if(new Date(task.deadline) < new Date()) item.classList.add('urgent');
-            
-            // Format deadline nicely
-            const dStr = new Date(task.deadline).toLocaleDateString();
-            item.innerHTML = `<span>UID: ...${task.client_uid.substring(0,4)}</span> | <b>${task.note}</b> | <span>${dStr}</span>`;
-            track.appendChild(item);
-        });
-    }
-}
-
-// --- 7. MISSED CALLS ---
-function setupMissedCalls() {
-    supabase.channel('missed-calls-update')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'missed_calls' }, () => refreshMissed())
-        .subscribe();
-    refreshMissed();
-}
-
-async function refreshMissed() {
-    const { data } = await supabase.from('missed_calls')
-        .select('*')
-        .eq('status', 'unattended');
-        
-    const list = document.getElementById('queue-missed');
-    list.innerHTML = '';
-    
-    if(data) {
-        data.forEach(call => {
-            const div = document.createElement('div');
-            div.className = 'queue-item';
-            div.innerHTML = `
-                <div class="q-name" style="color:var(--danger)">MISSED CALL</div>
-                <div class="q-meta">${new Date(call.created_at).toLocaleTimeString()}</div>
-            `;
-            div.onclick = async () => {
-                // Determine Conversation ID from Client ID if possible, or just mark attended
-                await supabase.from('missed_calls').update({ status: 'attended' }).eq('id', call.id);
-                // In a real app, you'd find the conversation associated with call.client_id here
-            };
-            list.appendChild(div);
-        });
-    }
-}
-
-async function searchClient(query) {
-    // Search conversations by UID Display
-    const { data } = await supabase.from('conversations')
-        .select('*')
-        .ilike('uid_display', `%${query}%`)
-        .single();
-        
-    if(data) {
-        pickUpChat(data.id, 'search');
-    } else {
-        alert("Client not found.");
-    }
-}
+            item.className = 'ribbon-
