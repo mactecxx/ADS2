@@ -1,14 +1,14 @@
-// --- CONFIGURATION ---
+// --- INITIALIZATION ---
 if (typeof _CONFIG === 'undefined') alert("Error: config.js missing");
 const supabase = window.supabase.createClient(_CONFIG.supabaseUrl, _CONFIG.supabaseKey);
 
 let currentEmp = null;
-let activeChatId = null;
-let currentChatChannel = null; // Store subscription to unsubscribe later
+let activeChatId = null; // This corresponds to conversations.id (UUID)
+let currentChatChannel = null;
 
 // --- 1. AUTHENTICATION ---
 window.addEventListener('load', async () => {
-    // Check if session exists
+    // Check Session
     const { data: { session } } = await supabase.auth.getSession();
     
     if (session) {
@@ -32,7 +32,7 @@ async function empLogin() {
 }
 
 async function verifyEmployee(user) {
-    // Check 'employees' table (replaces db.collection('employees'))
+    // Check 'employees' table
     const { data: emp, error } = await supabase.from('employees').select('*').eq('id', user.id).single();
 
     if (emp) {
@@ -45,7 +45,7 @@ async function verifyEmployee(user) {
     }
 }
 
-// --- 2. DASHBOARD INITIALIZATION ---
+// --- 2. DASHBOARD SETUP ---
 function initDashboard() {
     setupRibbon();
     setupQueues();
@@ -63,43 +63,48 @@ function initDashboard() {
     });
 }
 
-// --- 3. QUEUE SYSTEM (Replicates Snapshots) ---
+// --- 3. QUEUE SYSTEM (Realtime) ---
 function setupQueues() {
-    // Listen to ALL changes in 'conversations' table
+    // Subscribe to changes in 'conversations' table
     supabase.channel('public:conversations')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => {
-            refreshQueues(); // Refresh UI whenever DB changes
+            refreshQueues();
         })
         .subscribe();
     
-    refreshQueues(); // Initial Fetch
+    refreshQueues(); // Initial load
 }
 
 async function refreshQueues() {
-    // A. Waiting Queue
-    const { data: waiting } = await supabase.from('conversations')
-        .select('*').eq('status', 'queued').order('last_activity', { ascending: true });
+    // A. Waiting Queue (Status: 'queued')
+    const { data: waiting } = await supabase
+        .from('conversations')
+        .select('*')
+        .eq('status', 'queued')
+        .order('last_message_at', { ascending: true });
     
     const wList = document.getElementById('queue-waiting');
     wList.innerHTML = '';
     if(waiting) waiting.forEach(doc => renderQueueItem(doc, wList, 'waiting'));
 
     // B. My Active Chats
-    const { data: active } = await supabase.from('conversations')
-        .select('*').eq('assigned_to', currentEmp.id).eq('status', 'active');
+    const { data: active } = await supabase
+        .from('conversations')
+        .select('*')
+        .eq('assigned_to', currentEmp.id)
+        .eq('status', 'active');
     
     const aList = document.getElementById('queue-active');
     aList.innerHTML = '';
     if(active) {
         active.forEach(doc => renderQueueItem(doc, aList, 'active'));
-        // Sync Count
+        // Sync Active Count
         supabase.from('employees').update({ active_chat_count: active.length }).eq('id', currentEmp.id);
     }
 }
 
 function renderQueueItem(d, container, type) {
     const div = document.createElement('div');
-    // Keeps EXACT CSS classes from original
     div.className = `queue-item ${activeChatId === d.id ? 'active' : ''}`;
     div.innerHTML = `
         <div class="q-name">${d.user_name || 'Guest User'}</div>
@@ -135,19 +140,23 @@ async function pickUpChat(chatId, type) {
     loadSecureDetails(chatId);
 }
 
-// --- 5. CHAT UI (Replicates Messages Snapshot) ---
+// --- 5. CHAT UI ---
 function loadChatUI(chatId) {
-    // 1. Unsubscribe previous
     if (currentChatChannel) supabase.removeChannel(currentChatChannel);
 
-    document.getElementById('header-title').innerText = "Chatting with UID: " + chatId.substring(0,6);
+    // Get display UID for header (Need to fetch context first)
+    supabase.from('conversations').select('uid_display').eq('id', chatId).single()
+        .then(({ data }) => {
+            document.getElementById('header-title').innerText = "Chatting with UID: " + (data?.uid_display || '...');
+        });
+
     const msgArea = document.getElementById('msg-area');
     msgArea.innerHTML = '';
 
-    // 2. Load History
+    // Load History
     loadHistory(chatId);
 
-    // 3. Listen for NEW messages
+    // Listen for NEW messages
     currentChatChannel = supabase.channel(`chat:${chatId}`)
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` }, 
         payload => {
@@ -167,11 +176,12 @@ function renderMessage(d) {
     const msgArea = document.getElementById('msg-area');
     const time = new Date(d.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
     
-    // Uses EXACT CSS classes: 'msg-bubble', 'employee', 'client'
+    // Check if I am sender
     const isMe = d.sender_id === currentEmp.id;
+    
     msgArea.innerHTML += `
         <div class="msg-bubble ${isMe ? 'employee' : 'client'}">
-            ${d.text}
+            ${d.text || '[Attachment]'}
             <span class="msg-time">${time}</span>
         </div>`;
     msgArea.scrollTop = msgArea.scrollHeight;
@@ -183,11 +193,16 @@ async function sendEmpMessage() {
     if(!txt || !activeChatId) return;
     
     input.value = '';
+    
+    // Insert into 'messages'
     await supabase.from('messages').insert([{
         conversation_id: activeChatId,
         sender_id: currentEmp.id,
         text: txt
     }]);
+
+    // Update conversation timestamp
+    await supabase.from('conversations').update({ last_message_at: new Date() }).eq('id', activeChatId);
 }
 
 async function closeActiveChat() {
@@ -197,25 +212,25 @@ async function closeActiveChat() {
         activeChatId = null;
         document.getElementById('msg-area').innerHTML = '<div style="text-align:center; color:#94a3b8; margin-top:50px;">Select a client from the queue.</div>';
         document.getElementById('header-title').innerText = 'Select a Chat';
-        clearSecureInputs();
+        clearInputs();
     }
 }
 
-// --- 6. SECURE DETAILS & RIBBON ---
+// --- 6. SECURE RECORDS ---
 async function loadSecureDetails(chatId) {
-    // Map Conversation ID -> Client User ID
+    // 1. Get Client User ID from Conversation ID
     const { data: conv } = await supabase.from('conversations').select('user_id').eq('id', chatId).single();
     if(!conv) return;
 
-    // Fetch Secure Record
+    // 2. Fetch Secure Record using Client UID
     const { data: rec } = await supabase.from('secure_records').select('*').eq('client_uid', conv.user_id).single();
     
     document.getElementById('inp-passport').value = rec?.passport_number || '';
     document.getElementById('inp-appid').value = rec?.application_id || '';
-    document.getElementById('inp-notes').value = rec?.notes || '';
+    document.getElementById('inp-notes').value = rec?.internal_notes || '';
 }
 
-function clearSecureInputs() {
+function clearInputs() {
     document.getElementById('inp-passport').value = '';
     document.getElementById('inp-appid').value = '';
     document.getElementById('inp-notes').value = '';
@@ -224,6 +239,7 @@ function clearSecureInputs() {
 async function saveSecureDetails() {
     if(!activeChatId) return alert("Select a chat first.");
     
+    // Get Client UID
     const { data: conv } = await supabase.from('conversations').select('user_id').eq('id', activeChatId).single();
     if(!conv) return;
 
@@ -231,19 +247,20 @@ async function saveSecureDetails() {
         client_uid: conv.user_id,
         passport_number: document.getElementById('inp-passport').value,
         application_id: document.getElementById('inp-appid').value,
-        notes: document.getElementById('inp-notes').value,
+        internal_notes: document.getElementById('inp-notes').value,
         updated_by: currentEmp.name
     };
 
-    // Upsert
-    await supabase.from('secure_records').upsert(updates);
+    // Upsert to 'secure_records'
+    const { error } = await supabase.from('secure_records').upsert(updates);
+    if(error) console.error("Save Error", error);
 
-    // Ribbon
+    // Ribbon Task
     const deadline = document.getElementById('inp-deadline').value;
     if (deadline) {
         await supabase.from('global_tasks').insert([{
             client_uid: conv.user_id,
-            note: updates.notes.substring(0, 30),
+            note: updates.internal_notes.substring(0, 30),
             deadline: deadline,
             created_by: currentEmp.name
         }]);
@@ -253,9 +270,9 @@ async function saveSecureDetails() {
     }
 }
 
+// --- 7. RIBBON & MISSED CALLS ---
 function setupRibbon() {
-    // Listen for ribbon changes
-    supabase.channel('ribbon-realtime')
+    supabase.channel('ribbon-rt')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'global_tasks' }, () => loadRibbon())
         .subscribe();
     loadRibbon();
@@ -271,17 +288,19 @@ async function loadRibbon() {
         data.forEach(d => {
             const date = new Date(d.deadline).toLocaleDateString();
             const item = document.createElement('div');
-            item.className = 'ribbon-item'; // Exact CSS class
+            item.className = 'ribbon-item';
             if(new Date(d.deadline) < new Date()) item.classList.add('urgent');
-            item.innerHTML = `<span>UID: ...${d.client_uid ? d.client_uid.substring(0,4) : '???'}</span> | <b>${d.note}</b> | <span>${date}</span>`;
+            
+            // Note: client_uid here is the UUID. To show 6-digit display, we'd need a join, 
+            // but for simplicity/speed we show partial UUID or you can fetch the profile separately.
+            item.innerHTML = `<span>UID: ...${d.client_uid.substring(0,4)}</span> | <b>${d.note}</b> | <span>${date}</span>`;
             track.appendChild(item);
         });
     }
 }
 
-// --- 7. MISSED CALLS ---
 function setupMissedCalls() {
-    supabase.channel('missed-calls-rt')
+    supabase.channel('missed-rt')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'missed_calls' }, () => refreshMissed())
         .subscribe();
     refreshMissed();
@@ -309,8 +328,13 @@ async function refreshMissed() {
 }
 
 async function searchClient(query) {
-    // Search by exact UID Display (the 6 digit code)
-    const { data } = await supabase.from('conversations').select('*').eq('uid_display', query).single();
-    if(data) pickUpChat(data.id, 'search');
-    else alert("Client not found.");
+    // Search by 6-digit Display UID
+    const { data } = await supabase.from('conversations')
+        .select('*').eq('uid_display', query).single();
+        
+    if(data) {
+        pickUpChat(data.id, 'search');
+    } else {
+        alert("Client not found.");
+    }
 }
