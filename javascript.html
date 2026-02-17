@@ -1,0 +1,189 @@
+<script>
+// STATE
+let currentUser = null;
+
+// INIT
+window.onload = function() {
+  const storedUser = localStorage.getItem('imgbuy_user');
+  if(storedUser) {
+    currentUser = JSON.parse(storedUser);
+    setupDashboard();
+  }
+};
+
+// NAVIGATION
+function showView(viewId) {
+  document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
+  document.getElementById('view-' + viewId).classList.add('active');
+  
+  if(viewId === 'dashboard' && !currentUser) {
+    showView('login');
+    showToast("Please login first");
+  }
+}
+
+function logout() {
+  localStorage.removeItem('imgbuy_user');
+  currentUser = null;
+  document.getElementById('nav-login').style.display = 'block';
+  document.getElementById('nav-dash').style.display = 'none';
+  document.getElementById('nav-logout').style.display = 'none';
+  showView('home');
+}
+
+// UTILS
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.innerText = msg;
+  t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 3000);
+}
+
+function getBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = error => reject(error);
+  });
+}
+
+// --- ACTIONS ---
+
+// 1. SIGNUP
+async function handleSignup(e) {
+  e.preventDefault();
+  const btn = document.getElementById('btn-signup');
+  btn.innerText = "Creating Account...";
+  btn.disabled = true;
+
+  try {
+    const fileInput = document.getElementById('s-qr');
+    const qrBase64 = await getBase64(fileInput.files[0]);
+
+    const data = {
+      name: document.getElementById('s-name').value,
+      mobile: document.getElementById('s-mobile').value,
+      email: document.getElementById('s-email').value,
+      password: document.getElementById('s-pass').value,
+      qrFile: qrBase64,
+      mimeType: fileInput.files[0].type
+    };
+
+    google.script.run.withSuccessHandler(res => {
+      btn.innerText = "Sign Up";
+      btn.disabled = false;
+      if(res.success) {
+        alert(res.message);
+        showView('login');
+      } else {
+        showToast(res.message);
+      }
+    }).apiSignup(data);
+    
+  } catch(err) {
+    alert("Error processing file. Try a smaller image.");
+    btn.disabled = false;
+  }
+}
+
+// 2. LOGIN
+function handleLogin(e) {
+  e.preventDefault();
+  const btn = document.getElementById('btn-login');
+  btn.innerText = "Checking...";
+  
+  const input = document.getElementById('l-input').value;
+  const pass = document.getElementById('l-pass').value;
+  
+  google.script.run.withSuccessHandler(res => {
+    btn.innerText = "Login";
+    if(res.success) {
+      currentUser = { mobile: res.token, name: res.name };
+      localStorage.setItem('imgbuy_user', JSON.stringify(currentUser));
+      setupDashboard();
+    } else {
+      showToast(res.message);
+    }
+  }).apiLogin(input, pass);
+}
+
+// 3. UPLOAD
+async function handleUpload() {
+  const fileInput = document.getElementById('u-file');
+  const consent = document.getElementById('u-consent');
+  
+  if(fileInput.files.length === 0) return showToast("Please select a photo");
+  if(!consent.checked) return showToast("You must agree to the consent form");
+  
+  const btn = document.getElementById('btn-upload');
+  btn.innerText = "Uploading...";
+  btn.disabled = true;
+  
+  try {
+    const base64 = await getBase64(fileInput.files[0]);
+    
+    const data = {
+      userMobile: currentUser.mobile,
+      fileBase64: base64,
+      mimeType: fileInput.files[0].type,
+      category: document.getElementById('u-category').value
+    };
+    
+    google.script.run.withSuccessHandler(res => {
+      btn.innerText = "Upload & Submit";
+      btn.disabled = false;
+      alert(res.message);
+      fileInput.value = "";
+      consent.checked = false;
+      refreshDashboardData();
+    }).apiUploadImage(data);
+    
+  } catch(err) {
+    alert("File too large. Please try a photo under 5MB.");
+    btn.disabled = false;
+  }
+}
+
+// 4. LOAD DASHBOARD
+function setupDashboard() {
+  document.getElementById('nav-login').style.display = 'none';
+  document.getElementById('nav-dash').style.display = 'block';
+  document.getElementById('nav-logout').style.display = 'block';
+  
+  document.getElementById('dash-welcome').innerText = "Welcome, " + currentUser.name;
+  showView('dashboard');
+  refreshDashboardData();
+}
+
+function refreshDashboardData() {
+  google.script.run.withSuccessHandler(data => {
+    const tbody = document.getElementById('history-body');
+    tbody.innerHTML = "";
+    
+    let totalEarn = 0;
+    data.forEach(row => {
+      totalEarn += parseInt(row.earnings) || 0;
+      tbody.innerHTML += `<tr>
+        <td>${row.date}</td>
+        <td><span class="status-badge">${row.status}</span></td>
+        <td>₹${row.earnings}</td>
+      </tr>`;
+    });
+    
+    document.getElementById('stat-count').innerText = data.length;
+    document.getElementById('stat-earn').innerText = "₹" + totalEarn;
+    
+  }).apiGetDashboard(currentUser.mobile);
+}
+
+// 5. PASSWORD RESET
+function handleReset() {
+  const email = prompt("Enter your registered Email:");
+  if(email) {
+    google.script.run.withSuccessHandler(res => {
+      alert(res.message);
+    }).apiResetPassword(email);
+  }
+}
+</script>
