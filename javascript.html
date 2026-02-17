@@ -1,37 +1,29 @@
 <script>
-// STATE
 let currentUser = null;
 
-// INIT
 window.onload = function() {
   const storedUser = localStorage.getItem('imgbuy_user');
   if(storedUser) {
     currentUser = JSON.parse(storedUser);
     setupDashboard();
+    if(currentUser.isAdmin) document.getElementById('nav-admin').style.display = 'block';
+  } else {
+    // Load public leaderboard even if not logged in
+    refreshDashboardData();
   }
 };
 
-// NAVIGATION
 function showView(viewId) {
   document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
   document.getElementById('view-' + viewId).classList.add('active');
-  
-  if(viewId === 'dashboard' && !currentUser) {
-    showView('login');
-    showToast("Please login first");
-  }
+  if(viewId === 'admin') loadAdminData();
 }
 
 function logout() {
   localStorage.removeItem('imgbuy_user');
-  currentUser = null;
-  document.getElementById('nav-login').style.display = 'block';
-  document.getElementById('nav-dash').style.display = 'none';
-  document.getElementById('nav-logout').style.display = 'none';
-  showView('home');
+  location.reload();
 }
 
-// UTILS
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.innerText = msg;
@@ -39,151 +31,181 @@ function showToast(msg) {
   setTimeout(() => t.style.display = 'none', 3000);
 }
 
-function getBase64(file) {
+// --- IMAGE COMPRESSION LOGIC ---
+function compressImage(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
-    reader.onload = () => resolve(reader.result);
+    reader.onload = event => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        const canvas = document.getElementById('compress-canvas');
+        const MAX_WIDTH = 1200; // Resize to reasonable width
+        const scaleSize = MAX_WIDTH / img.width;
+        canvas.width = MAX_WIDTH;
+        canvas.height = img.height * scaleSize;
+        
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        
+        // Compress to JPEG at 70% quality
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.7); 
+        resolve(dataUrl);
+      }
+    };
     reader.onerror = error => reject(error);
   });
 }
 
-// --- ACTIONS ---
+// --- CORE ACTIONS ---
 
-// 1. SIGNUP
 async function handleSignup(e) {
   e.preventDefault();
   const btn = document.getElementById('btn-signup');
-  btn.innerText = "Creating Account...";
-  btn.disabled = true;
+  btn.innerText = "Processing..."; btn.disabled = true;
 
   try {
     const fileInput = document.getElementById('s-qr');
-    const qrBase64 = await getBase64(fileInput.files[0]);
+    const qrBase64 = await compressImage(fileInput.files[0]); // Compress QR too
 
     const data = {
       name: document.getElementById('s-name').value,
       mobile: document.getElementById('s-mobile').value,
       email: document.getElementById('s-email').value,
       password: document.getElementById('s-pass').value,
+      referral: document.getElementById('s-ref').value,
       qrFile: qrBase64,
-      mimeType: fileInput.files[0].type
+      mimeType: "image/jpeg"
     };
 
     google.script.run.withSuccessHandler(res => {
-      btn.innerText = "Sign Up";
-      btn.disabled = false;
-      if(res.success) {
-        alert(res.message);
-        showView('login');
-      } else {
-        showToast(res.message);
-      }
+      btn.innerText = "Sign Up"; btn.disabled = false;
+      if(res.success) { alert(res.message); showView('login'); }
+      else { showToast(res.message); }
     }).apiSignup(data);
-    
-  } catch(err) {
-    alert("Error processing file. Try a smaller image.");
-    btn.disabled = false;
-  }
+  } catch(err) { btn.disabled = false; alert("Error processing image."); }
 }
 
-// 2. LOGIN
 function handleLogin(e) {
   e.preventDefault();
   const btn = document.getElementById('btn-login');
   btn.innerText = "Checking...";
   
-  const input = document.getElementById('l-input').value;
-  const pass = document.getElementById('l-pass').value;
-  
   google.script.run.withSuccessHandler(res => {
     btn.innerText = "Login";
     if(res.success) {
-      currentUser = { mobile: res.token, name: res.name };
-      localStorage.setItem('imgbuy_user', JSON.stringify(currentUser));
+      currentUser = res;
+      localStorage.setItem('imgbuy_user', JSON.stringify(res));
       setupDashboard();
-    } else {
-      showToast(res.message);
-    }
-  }).apiLogin(input, pass);
+      if(res.isAdmin) document.getElementById('nav-admin').style.display = 'block';
+    } else { showToast(res.message); }
+  }).apiLogin(document.getElementById('l-input').value, document.getElementById('l-pass').value);
 }
 
-// 3. UPLOAD
 async function handleUpload() {
   const fileInput = document.getElementById('u-file');
-  const consent = document.getElementById('u-consent');
-  
-  if(fileInput.files.length === 0) return showToast("Please select a photo");
-  if(!consent.checked) return showToast("You must agree to the consent form");
-  
+  if(fileInput.files.length === 0 || !document.getElementById('u-consent').checked) 
+    return showToast("Select photo & agree to consent.");
+
   const btn = document.getElementById('btn-upload');
-  btn.innerText = "Uploading...";
-  btn.disabled = true;
-  
+  btn.innerText = "Compressing & Uploading..."; btn.disabled = true;
+
   try {
-    const base64 = await getBase64(fileInput.files[0]);
+    // COMPRESS BEFORE UPLOAD
+    const base64 = await compressImage(fileInput.files[0]);
     
     const data = {
-      userMobile: currentUser.mobile,
+      userMobile: currentUser.token,
       fileBase64: base64,
-      mimeType: fileInput.files[0].type,
+      mimeType: "image/jpeg",
       category: document.getElementById('u-category').value
     };
     
     google.script.run.withSuccessHandler(res => {
-      btn.innerText = "Upload & Submit";
-      btn.disabled = false;
+      btn.innerText = "Upload"; btn.disabled = false;
       alert(res.message);
-      fileInput.value = "";
-      consent.checked = false;
       refreshDashboardData();
     }).apiUploadImage(data);
-    
-  } catch(err) {
-    alert("File too large. Please try a photo under 5MB.");
-    btn.disabled = false;
-  }
+  } catch(e) { alert("Error uploading."); btn.disabled = false; }
 }
 
-// 4. LOAD DASHBOARD
 function setupDashboard() {
   document.getElementById('nav-login').style.display = 'none';
   document.getElementById('nav-dash').style.display = 'block';
   document.getElementById('nav-logout').style.display = 'block';
-  
-  document.getElementById('dash-welcome').innerText = "Welcome, " + currentUser.name;
+  document.getElementById('dash-welcome').innerText = "Hi, " + currentUser.name;
+  document.getElementById('dash-ref-code').innerText = currentUser.token;
   showView('dashboard');
   refreshDashboardData();
 }
 
 function refreshDashboardData() {
+  const mobile = currentUser ? currentUser.token : "";
   google.script.run.withSuccessHandler(data => {
-    const tbody = document.getElementById('history-body');
-    tbody.innerHTML = "";
-    
-    let totalEarn = 0;
-    data.forEach(row => {
-      totalEarn += parseInt(row.earnings) || 0;
-      tbody.innerHTML += `<tr>
-        <td>${row.date}</td>
-        <td><span class="status-badge">${row.status}</span></td>
-        <td>₹${row.earnings}</td>
-      </tr>`;
-    });
-    
-    document.getElementById('stat-count').innerText = data.length;
-    document.getElementById('stat-earn').innerText = "₹" + totalEarn;
-    
-  }).apiGetDashboard(currentUser.mobile);
+    // 1. Update Leaderboard
+    const lbEl = document.getElementById('leaderboard-list');
+    if(data.leaderboard.length > 0) {
+      lbEl.innerHTML = data.leaderboard.map((u, i) => `#${i+1} ${u.name} (₹${u.total})`).join("  |  ");
+    }
+
+    // 2. Update History (if logged in)
+    if(currentUser) {
+      const tbody = document.getElementById('history-body');
+      tbody.innerHTML = "";
+      let totalEarn = 0;
+      data.history.forEach(row => {
+        totalEarn += parseInt(row.earnings) || 0;
+        let color = row.status === 'Approved' ? 'green' : (row.status === 'Rejected' ? 'red' : 'orange');
+        tbody.innerHTML += `<tr>
+          <td>${row.date}</td>
+          <td><span style="color:${color}">${row.status}</span><br><small>${row.comment}</small></td>
+          <td>₹${row.earnings}</td>
+        </tr>`;
+      });
+      document.getElementById('stat-count').innerText = data.history.length;
+      document.getElementById('stat-earn').innerText = "₹" + totalEarn;
+    }
+  }).apiGetDashboard(mobile);
 }
 
-// 5. PASSWORD RESET
-function handleReset() {
-  const email = prompt("Enter your registered Email:");
-  if(email) {
-    google.script.run.withSuccessHandler(res => {
-      alert(res.message);
-    }).apiResetPassword(email);
-  }
+// --- ADMIN FUNCTIONS ---
+function loadAdminData() {
+  const grid = document.getElementById('admin-grid');
+  grid.innerHTML = "Loading pending images...";
+  
+  google.script.run.withSuccessHandler(images => {
+    grid.innerHTML = "";
+    if(images.length === 0) grid.innerHTML = "No pending images.";
+    
+    images.forEach(img => {
+      const card = document.createElement('div');
+      card.className = 'admin-card';
+      card.innerHTML = `
+        <img src="${img.url}">
+        <p>User: ${img.userMobile}</p>
+        <p>Cat: ${img.category}</p>
+        <input type="number" id="amt-${img.rowIndex}" placeholder="Price (₹)" value="10">
+        <input type="text" id="com-${img.rowIndex}" placeholder="Comment (Optional)">
+        <div class="admin-actions">
+          <button class="btn-approve" onclick="processImg(${img.rowIndex}, 'APPROVE')">✔ Buy</button>
+          <button class="btn-reject" onclick="processImg(${img.rowIndex}, 'REJECT')">❌ Reject</button>
+        </div>
+      `;
+      grid.appendChild(card);
+    });
+  }).apiAdminGetPending();
+}
+
+function processImg(index, action) {
+  const amount = document.getElementById('amt-'+index).value;
+  const comment = document.getElementById('com-'+index).value;
+  
+  // Optimistic UI update (remove card immediately)
+  event.target.closest('.admin-card').style.display = 'none';
+  
+  google.script.run.withSuccessHandler(res => {
+    showToast("Processed Successfully");
+  }).apiAdminProcess(index, action, amount, comment);
 }
 </script>
