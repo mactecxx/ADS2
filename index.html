@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
+    <?!= include('styles'); ?>
+  </head>
+  <body>
+    
+    <nav>
+      <div class="logo">Imgbuy</div>
+      <div class="nav-links">
+        <a href="#" onclick="showView('home')">Home</a>
+        <a href="#" id="nav-login" onclick="showView('login')">Login</a>
+        <a href="#" id="nav-dash" onclick="showView('dashboard')" style="display:none;">Dashboard</a>
+        <a href="#" id="nav-logout" onclick="logout()" style="display:none;">Logout</a>
+      </div>
+    </nav>
+
+    <div id="view-home" class="view active">
+      <header class="hero">
+        <h1>Turn Your Photos into Money</h1>
+        <p>Earn ₹5 to ₹100 per photo. No professional camera needed.</p>
+        <button class="btn-primary" onclick="showView('signup')">Start Earning Now</button>
+      </header>
+      
+      <section class="testimonials">
+        <h2>Top Earners from India</h2>
+        <div class="cards">
+          <div class="card">
+            <p>"I uploaded photos of my village market and earned ₹500 in a week!"</p>
+            <span>- Rahul, Bihar</span>
+          </div>
+          <div class="card">
+            <p>"Sold my travel selfies to Imgbuy. Best side income."</p>
+            <span>- Priya, Mumbai</span>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="view-signup" class="view">
+      <div class="form-container">
+        <h2>Create Account</h2>
+        <form id="signup-form" onsubmit="handleSignup(event)">
+          <input type="text" id="s-name" placeholder="Full Name" required>
+          <input type="number" id="s-mobile" placeholder="Mobile Number" required>
+          <input type="email" id="s-email" placeholder="Gmail Address" required>
+          <input type="password" id="s-pass" placeholder="Create Password" required>
+          
+          <label>Upload Payment QR (Scanner Image)</label>
+          <small>We need this to pay you money directly.</small>
+          <input type="file" id="s-qr" accept="image/*" required>
+          
+          <button type="submit" class="btn-primary" id="btn-signup">Sign Up</button>
+        </form>
+        <p>Already have an account? <a href="#" onclick="showView('login')">Login</a></p>
+      </div>
+    </div>
+
+    <div id="view-login" class="view">
+      <div class="form-container">
+        <h2>Login</h2>
+        <form id="login-form" onsubmit="handleLogin(event)">
+          <input type="text" id="l-input" placeholder="Mobile or Email" required>
+          <input type="password" id="l-pass" placeholder="Password" required>
+          <button type="submit" class="btn-primary" id="btn-login">Login</button>
+        </form>
+        <p><a href="#" onclick="handleReset()">Forgot Password?</a></p>
+        <p>New here? <a href="#" onclick="showView('signup')">Create Account</a></p>
+      </div>
+    </div>
+
+    <div id="view-dashboard" class="view">
+      <div class="dash-header">
+        <h2 id="dash-welcome">Welcome</h2>
+        <div class="stats-box">
+          <span>Total Uploads: <b id="stat-count">0</b></span>
+          <span>Total Earnings: <b id="stat-earn">₹0</b></span>
+        </div>
+      </div>
+
+      <div class="upload-section">
+        <h3>Upload New Photo</h3>
+        <input type="file" id="u-file" accept="image/*" capture="environment">
+        
+        <select id="u-category">
+          <option value="Selfie">Selfie / Portrait</option>
+          <option value="Nature">Nature / Animals</option>
+          <option value="Building">Buildings / Infrastructure</option>
+          <option value="Object">Random Objects</option>
+        </select>
+
+        <div class="consent-box">
+          <input type="checkbox" id="u-consent" required>
+          <label for="u-consent">
+            <b>English:</b> "I have full right of this image and no one else can challenge it. I sell the image to Imgbuy"<br>
+            <b>Hindi:</b> "मेरे पास इस छवि का पूर्ण अधिकार है और कोई भी इसे चुनौती नहीं दे सकता है। मैं यह छवि Imgbuy को बेचता/बेचती हूँ"
+          </label>
+        </div>
+        
+        <button class="btn-primary" onclick="handleUpload()" id="btn-upload">Upload & Submit</button>
+      </div>
+
+      <div class="history-section">
+        <h3>Your Uploads</h3>
+        <table id="history-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Status</th>
+              <th>Earned</th>
+            </tr>
+          </thead>
+          <tbody id="history-body">
+            </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="loader" class="loader hidden"></div>
+    <div id="toast" class="toast">Message</div>
+
+    <?!= include('javascript'); ?>
+  </body>
+</html>
